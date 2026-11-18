@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тренировка по Баринову</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: #242424; font: 16px/1.5 "Franklin Gothic Book", Tahoma, Arial, sans-serif; }
+  main { max-width: 480px; margin: auto; padding: 24px 20px 40px; }
+  header { font-size: 19px; font-weight: 700; padding: 0 0 12px; border-bottom: 5px solid #f26b43; }
+  h1 { font-size: 24px; line-height: 1.16; margin: 16px 0 12px; text-transform: uppercase; overflow-wrap: anywhere; }
+  p { margin: 0 0 16px; }
+  .progress { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-top: 19px; }
+  progress { width: 100%; height: 8px; accent-color: #b82d17; }
+  #options, #module-list { display: grid; gap: 9px; }
+  button { min-height: 52px; padding: 12px 14px; border: 1px solid #bfbfbf; border-radius: 2px; color: inherit; background: white; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+  .module { border-left: 5px solid #f26b43; width: 100%; }
+  .module small { display: block; color: #555; }
+  #back { margin-top: 14px; border: 0; padding: 0; color: #a32613; min-height: 44px; }
+  #source { color: #555; font-size: 13px; margin-top: 10px; }
+  .option { display: grid; grid-template-columns: 24px 1fr; gap: 8px; }
+  .option b { color: #a32613; }
+  button:focus-visible { outline: 3px solid #a32613; outline-offset: 2px; }
+  .correct { background: #dceee3; border-color: #46815d; }
+  .incorrect { background: #f9e5de; border-color: #aa604e; }
+  #feedback { margin: 16px 0 0; }
+  #next { width: 100%; margin-top: 16px; background: #a32613; color: white; font-weight: 700; text-align: center; }
+</style>
+<main>
+  <header>Управляемость или иллюзия?</header>
+  <section id="menu">
+    <h1 id="menu-title" tabindex="-1">Тренировка по Баринову</h1>
+    <div id="module-list"></div>
+  </section>
+  <section id="quiz" hidden>
+  <button id="back" type="button">← К модулям</button>
+  <div class="progress"><span id="section"></span><span id="count"></span></div>
+  <progress id="progress" aria-label="Прогресс тренировки"></progress>
+  <h1 id="topic" tabindex="-1"></h1>
+  <p id="prompt"></p>
+  <div id="options" role="group" aria-labelledby="topic prompt"></div>
+  <p id="feedback" role="status" aria-atomic="true"></p>
+  <p id="source" hidden></p>
+  <button id="next" type="button" hidden></button>
+  </section>
+</main>
+<script src="questions.js"></script>
+<script src="slides.js"></script>
+<script src="executor-questions.js"></script>
+<script src="process-questions.js"></script>
+<script>
+  const byId = id => document.getElementById(id);
+  const progress = byId('progress');
+  const topic = byId('topic');
+  const options = byId('options');
+  const feedback = byId('feedback');
+  const next = byId('next');
+  const source = byId('source');
+  const menu = byId('menu');
+  const quiz = byId('quiz');
+  const modules = [
+    ['Модуль 1. Управляемость исполнителя', [
+      ...slideQuestions.sort((a, b) => a.slide - b.slide),
+      ...questions.slice(0, 10),
+      ...executorQuestions
+    ]],
+    ['Модуль 2. Управляемость процессами', [...processQuestions, ...questions.slice(10)]]
+  ];
+  let active = [];
+  let activeModule = '';
+  let index = 0;
+  let score = 0;
+  let answered = false;
+
+  for (const [name, bank] of modules) {
+    const button = document.createElement('button');
+    const count = document.createElement('small');
+    button.className = 'module';
+    button.type = 'button';
+    button.textContent = name;
+    count.textContent = 'Вопросов · ' + bank.length;
+    button.append(count);
+    button.addEventListener('click', () => {
+      active = bank;
+      activeModule = name;
+      index = 0;
+      score = 0;
+      progress.max = active.length;
+      menu.hidden = true;
+      quiz.hidden = false;
+      render();
+      focusTop(topic);
+    });
+    byId('module-list').append(button);
+  }
+
+  function focusTop(heading) {
+    heading.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  }
+
+  byId('back').addEventListener('click', () => {
+    quiz.hidden = true;
+    menu.hidden = false;
+    focusTop(byId('menu-title'));
+  });
+
+  function render() {
+    const question = active[index];
+    answered = false;
+    feedback.textContent = '';
+    source.hidden = true;
+    options.replaceChildren();
+    progress.value = index;
+    next.hidden = Boolean(question);
+
+    if (!question) {
+      byId('section').textContent = 'Модуль завершён';
+      byId('count').textContent = '';
+      topic.textContent = score + ' из ' + active.length + ' правильных ответов';
+      byId('prompt').textContent = '';
+      next.textContent = 'Пройти ещё раз';
+      return;
+    }
+
+    byId('section').textContent = activeModule;
+    byId('count').textContent = (index + 1) + ' / ' + active.length;
+    topic.textContent = question.topic;
+    byId('prompt').textContent = question.prompt;
+    question.options.forEach((answer, position) => {
+      const button = document.createElement('button');
+      const letter = document.createElement('b');
+      const label = document.createElement('span');
+      button.type = 'button';
+      button.className = 'option';
+      letter.textContent = 'АБВГ'[position] + '.';
+      label.textContent = answer;
+      button.append(letter, label);
+      button.addEventListener('click', () => check(question, position));
+      options.append(button);
+    });
+  }
+
+  function check(question, position) {
+    if (answered) return;
+    answered = true;
+    const correct = position === question.correct;
+    if (correct) score++;
+    progress.value = index + 1;
+    options.children[question.correct].classList.add('correct');
+    if (!correct) options.children[position].classList.add('incorrect');
+    for (const button of options.children) button.setAttribute('aria-disabled', 'true');
+    const result = correct ? 'Верно.' : 'Правильный ответ — ' + 'АБВГ'[question.correct] + '.';
+    feedback.textContent = result + ' ' + (question.explanation ?? question.options[question.correct] + '.');
+    if (question.slide) {
+      source.textContent = 'Презентация «Управляемость или иллюзия?», слайд ' + question.slide;
+      source.hidden = false;
+    }
+    if (question.page) {
+      source.textContent = activeModule + ', с. ' + question.page;
+      source.hidden = false;
+    }
+    next.textContent = index + 1 === active.length ? 'Посмотреть результат' : 'Следующий вопрос';
+    next.hidden = false;
+    next.scrollIntoView({ block: 'nearest' });
+  }
+
+  next.addEventListener('click', () => {
+    if (index === active.length) {
+      index = 0;
+      score = 0;
+    } else {
+      index++;
+    }
+    render();
+    focusTop(topic);
+  });
+</script>
+</html>
+
