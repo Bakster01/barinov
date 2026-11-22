@@ -14,7 +14,8 @@
   progress { width: 100%; height: 8px; accent-color: #b82d17; }
   #options, #module-list { display: grid; gap: 9px; }
   button { min-height: 52px; padding: 12px 14px; border: 1px solid #bfbfbf; border-radius: 2px; color: inherit; background: white; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
-  .module { border-left: 5px solid #f26b43; width: 100%; }
+  .module { border: 1px solid #bfbfbf; border-left: 5px solid #f26b43; padding: 12px; display: grid; gap: 8px; }
+  .module h2 { font-size: 17px; line-height: 1.25; margin: 0; }
   .module small { display: block; color: #555; }
   #back { margin-top: 14px; border: 0; padding: 0; color: #a32613; min-height: 44px; }
   #source { color: #555; font-size: 13px; margin-top: 10px; }
@@ -69,6 +70,7 @@
   let active = [];
   let activeModule = '';
   let activeModuleNumber = 0;
+  let shuffled = false;
   let index = 0;
   let score = 0;
   let selected = null;
@@ -92,9 +94,20 @@
     }
   }
 
-  function savedModule(number, bank) {
-    const saved = readProgress(number);
+  function progressKey(number, shuffle) {
+    return shuffle ? 'shuffle:' + number : number;
+  }
+
+  function savedModule(number, bank, shuffle) {
+    const saved = readProgress(progressKey(number, shuffle));
     if (!saved) return null;
+    if (shuffle) {
+      const byQuestionId = new Map(bank.map(question => [question.id, question]));
+      const { order } = saved;
+      if (!Array.isArray(order) || order.length !== bank.length ||
+          new Set(order).size !== bank.length || order.some(id => !byQuestionId.has(id))) return null;
+      bank = order.map(id => byQuestionId.get(id));
+    }
     const { index, score, selected, questionId } = saved;
     if (!Number.isInteger(index) || index < 0 || index > bank.length) return null;
     const question = bank[index];
@@ -102,21 +115,36 @@
     if (selected !== null && (!Number.isInteger(selected) || !question?.options[selected])) return null;
     const answeredCount = index + Number(selected !== null);
     if (!Number.isInteger(score) || score < 0 || score > answeredCount) return null;
-    return saved;
+    return { ...saved, bank };
+  }
+
+  function shuffleBank(bank) {
+    const order = [...bank];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    return order;
   }
 
   function saveModule() {
-    writeProgress(activeModuleNumber, { index, score, selected, questionId: active[index]?.id ?? null });
+    const saved = { index, score, selected, questionId: active[index]?.id ?? null };
+    if (shuffled) saved.order = active.map(question => question.id);
+    writeProgress(progressKey(activeModuleNumber, shuffled), saved);
   }
 
-  function openModule(number, focus = true) {
-    [activeModule, active] = modules[number - 1];
+  function openModule(number, shuffle = false, focus = true) {
+    const [name, bank] = modules[number - 1];
+    activeModule = name;
     activeModuleNumber = number;
-    const saved = savedModule(number, active);
+    shuffled = shuffle;
+    const saved = savedModule(number, bank, shuffle);
+    active = saved?.bank ?? (shuffle ? shuffleBank(bank) : bank);
     index = saved?.index ?? 0;
     score = saved?.score ?? 0;
     selected = saved?.selected ?? null;
-    writeProgress('active', number);
+    if (shuffle && !saved) saveModule();
+    writeProgress('active', shuffle ? { number, shuffle: true } : number);
     progress.max = active.length;
     menu.hidden = true;
     quiz.hidden = false;
@@ -124,30 +152,38 @@
     if (focus) focusTop(topic);
   }
 
-  const moduleCounts = [];
+  const modeCounts = [];
   for (const [i, [name]] of modules.entries()) {
-    const button = document.createElement('button');
-    const count = document.createElement('small');
-    button.className = 'module';
-    button.type = 'button';
-    button.textContent = name;
-    button.append(count);
-    button.addEventListener('click', () => openModule(i + 1));
-    moduleCounts.push(count);
-    byId('module-list').append(button);
+    const card = document.createElement('section');
+    const heading = document.createElement('h2');
+    card.className = 'module';
+    heading.textContent = name;
+    card.append(heading);
+    for (const [shuffle, label] of [[false, 'По порядку'], [true, 'Вразброс']]) {
+      const button = document.createElement('button');
+      const count = document.createElement('small');
+      button.type = 'button';
+      button.textContent = label;
+      button.setAttribute('aria-label', name + '. ' + label);
+      button.append(count);
+      button.addEventListener('click', () => openModule(i + 1, shuffle));
+      modeCounts.push({ number: i + 1, shuffle, count });
+      card.append(button);
+    }
+    byId('module-list').append(card);
   }
 
   function refreshMenu() {
-    modules.forEach(([, bank], i) => {
-      const saved = savedModule(i + 1, bank);
-      const count = moduleCounts[i];
+    for (const { number, shuffle, count } of modeCounts) {
+      const [, bank] = modules[number - 1];
+      const saved = savedModule(number, bank, shuffle);
       count.textContent = 'Вопросов · ' + bank.length;
       if (saved?.index === bank.length) {
         count.textContent = 'Завершён · ' + saved.score + ' из ' + bank.length;
       } else if (saved && (saved.index > 0 || saved.selected !== null)) {
         count.textContent = 'Продолжить · вопрос ' + (saved.index + 1) + ' из ' + bank.length;
       }
-    });
+    }
   }
 
   function focusTop(heading) {
@@ -165,6 +201,7 @@
 
   function render() {
     const question = active[index];
+    const modeSuffix = shuffled ? ' · Вразброс' : '';
     feedback.textContent = '';
     source.hidden = true;
     options.replaceChildren();
@@ -172,7 +209,7 @@
     next.hidden = Boolean(question);
 
     if (!question) {
-      byId('section').textContent = 'Модуль завершён';
+      byId('section').textContent = 'Модуль завершён' + modeSuffix;
       byId('count').textContent = '';
       topic.textContent = score + ' из ' + active.length + ' правильных ответов';
       byId('prompt').textContent = '';
@@ -180,7 +217,7 @@
       return;
     }
 
-    byId('section').textContent = activeModule;
+    byId('section').textContent = activeModule + modeSuffix;
     byId('count').textContent = (index + 1) + ' / ' + active.length;
     topic.textContent = question.topic;
     byId('prompt').textContent = question.prompt;
@@ -232,6 +269,7 @@
     if (index === active.length) {
       index = 0;
       score = 0;
+      if (shuffled) active = shuffleBank(modules[activeModuleNumber - 1][1]);
     } else {
       index++;
     }
@@ -243,7 +281,10 @@
 
   refreshMenu();
   const lastModule = readProgress('active');
-  if (Number.isInteger(lastModule) && modules[lastModule - 1]) openModule(lastModule, false);
+  const lastNumber = lastModule?.number ?? lastModule;
+  if (Number.isInteger(lastNumber) && modules[lastNumber - 1]) {
+    openModule(lastNumber, lastModule?.shuffle === true, false);
+  }
 </script>
 </html>
 
