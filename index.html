@@ -68,30 +68,86 @@
   ];
   let active = [];
   let activeModule = '';
+  let activeModuleNumber = 0;
   let index = 0;
   let score = 0;
-  let answered = false;
+  let selected = null;
+  const storagePrefix = 'barinov-training:v1:';
+  const sessionProgress = new Map();
 
-  for (const [name, bank] of modules) {
+  function readProgress(key) {
+    try {
+      return JSON.parse(localStorage.getItem(storagePrefix + key));
+    } catch {
+      return sessionProgress.get(key) ?? null;
+    }
+  }
+
+  function writeProgress(key, value) {
+    sessionProgress.set(key, value);
+    try {
+      localStorage.setItem(storagePrefix + key, JSON.stringify(value));
+    } catch {
+      // Some browser modes only allow progress in the current tab.
+    }
+  }
+
+  function savedModule(number, bank) {
+    const saved = readProgress(number);
+    if (!saved) return null;
+    const { index, score, selected, questionId } = saved;
+    if (!Number.isInteger(index) || index < 0 || index > bank.length) return null;
+    const question = bank[index];
+    if (questionId !== (question?.id ?? null)) return null;
+    if (selected !== null && (!Number.isInteger(selected) || !question?.options[selected])) return null;
+    const answeredCount = index + Number(selected !== null);
+    if (!Number.isInteger(score) || score < 0 || score > answeredCount) return null;
+    return saved;
+  }
+
+  function saveModule() {
+    writeProgress(activeModuleNumber, { index, score, selected, questionId: active[index]?.id ?? null });
+  }
+
+  function openModule(number, focus = true) {
+    [activeModule, active] = modules[number - 1];
+    activeModuleNumber = number;
+    const saved = savedModule(number, active);
+    index = saved?.index ?? 0;
+    score = saved?.score ?? 0;
+    selected = saved?.selected ?? null;
+    writeProgress('active', number);
+    progress.max = active.length;
+    menu.hidden = true;
+    quiz.hidden = false;
+    render();
+    if (focus) focusTop(topic);
+  }
+
+  const moduleCounts = [];
+  for (const [i, [name]] of modules.entries()) {
     const button = document.createElement('button');
     const count = document.createElement('small');
     button.className = 'module';
     button.type = 'button';
     button.textContent = name;
-    count.textContent = 'Вопросов · ' + bank.length;
     button.append(count);
-    button.addEventListener('click', () => {
-      active = bank;
-      activeModule = name;
-      index = 0;
-      score = 0;
-      progress.max = active.length;
-      menu.hidden = true;
-      quiz.hidden = false;
-      render();
-      focusTop(topic);
-    });
+    button.addEventListener('click', () => openModule(i + 1));
+    moduleCounts.push(count);
     byId('module-list').append(button);
+  }
+
+  function refreshMenu() {
+    modules.forEach(([, bank], i) => {
+      const saved = savedModule(i + 1, bank);
+      const count = moduleCounts[i];
+      count.textContent = 'Вопросов · ' + bank.length;
+      if (saved?.index === bank.length) {
+        count.textContent = 'Завершён · ' + saved.score + ' из ' + bank.length;
+      } else if (saved && (saved.index > 0 || saved.selected !== null)) {
+        count.textContent = 'Продолжить · вопрос ' + (saved.index + 1) + ' из ' + bank.length;
+      }
+    });
   }
 
   function focusTop(heading) {
@@ -100,6 +156,8 @@
   }
 
   byId('back').addEventListener('click', () => {
+    writeProgress('active', null);
+    refreshMenu();
     quiz.hidden = true;
     menu.hidden = false;
     focusTop(byId('menu-title'));
@@ -107,7 +165,6 @@
 
   function render() {
     const question = active[index];
-    answered = false;
     feedback.textContent = '';
     source.hidden = true;
     options.replaceChildren();
@@ -139,13 +196,20 @@
       button.addEventListener('click', () => check(question, position));
       options.append(button);
     });
+    if (selected !== null) showAnswer(question, selected);
   }
 
   function check(question, position) {
-    if (answered) return;
-    answered = true;
+    if (selected !== null) return;
+    selected = position;
+    if (position === question.correct) score++;
+    saveModule();
+    showAnswer(question, position);
+    next.scrollIntoView({ block: 'nearest' });
+  }
+
+  function showAnswer(question, position) {
     const correct = position === question.correct;
-    if (correct) score++;
     progress.value = index + 1;
     options.children[question.correct].classList.add('correct');
     if (!correct) options.children[position].classList.add('incorrect');
@@ -162,7 +226,6 @@
     }
     next.textContent = index + 1 === active.length ? 'Посмотреть результат' : 'Следующий вопрос';
     next.hidden = false;
-    next.scrollIntoView({ block: 'nearest' });
   }
 
   next.addEventListener('click', () => {
@@ -172,9 +235,15 @@
     } else {
       index++;
     }
+    selected = null;
+    saveModule();
     render();
     focusTop(topic);
   });
+
+  refreshMenu();
+  const lastModule = readProgress('active');
+  if (Number.isInteger(lastModule) && modules[lastModule - 1]) openModule(lastModule, false);
 </script>
 </html>
 
